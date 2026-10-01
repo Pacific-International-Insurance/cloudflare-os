@@ -10,6 +10,10 @@ declare global {
       // (which is what a secret binding, can carry).
       ADMINS?: string[] | string;
 
+      // Pacific: per-user spend tiers for AI Gateway spend limits, as { basic?, advanced? } email
+      // arrays in a JSON binding or the same value as a JSON string. Unset: no tier metadata.
+      TIERS?: { basic?: string[]; advanced?: string[] } | string;
+
       // Workers AI binding (injected by generate-wrangler-prod / run-dev-server; not in base wrangler.jsonc).
       WORKERS_AI: Ai;
 
