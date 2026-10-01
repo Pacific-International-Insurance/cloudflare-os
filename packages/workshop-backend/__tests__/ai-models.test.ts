@@ -1698,3 +1698,42 @@ describe("System prompt cache blocks", () => {
     expect(body.prompt_cache_key).toBe("chat-7");
   }, 15000);
 });
+
+describe("getModel spend tier metadata", () => {
+  beforeEach(() => {
+    capturedRequests.length = 0;
+  });
+
+  it("adds the initiator's spend tier when TIERS is configured", async () => {
+    const handle = getModel(env({ TIERS: { basic: ["user-123"] } }), ANTHROPIC_CONFIG, INITIATOR, {
+      metadata: { source: "chat", gadgetId: "gadget-123", chatId: 7 },
+    });
+
+    const request = await captureRequest(handle);
+    expect(JSON.parse(request.headers.get("cf-aig-metadata")!)).toEqual({
+      user: "user-123",
+      tier: "basic",
+      source: "chat",
+      gadgetId: "gadget-123",
+      chatId: 7,
+    });
+  }, 15000);
+
+  it("charges a gadget's calls to its owner's tier within the 5-entry limit", async () => {
+    const handle = getModel(
+        env({ TIERS: { advanced: ["owner-456"] } }), ANTHROPIC_CONFIG, GADGET_INITIATOR, {
+          metadata: { source: "thread-title", gadgetId: "gadget-456", chatId: 8 },
+        });
+
+    const request = await captureRequest(handle);
+    const metadata = JSON.parse(request.headers.get("cf-aig-metadata")!);
+    expect(metadata).toEqual({
+      user: "owner-456",
+      tier: "advanced",
+      source: "thread-title",
+      gadgetId: "gadget-456",
+      automated: true,
+    });
+    expect(Object.keys(metadata).length).toBeLessThanOrEqual(5);
+  }, 15000);
+});
