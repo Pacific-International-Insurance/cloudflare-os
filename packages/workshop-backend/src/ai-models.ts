@@ -38,6 +38,7 @@ import {
   type AiGatewayLogRoute,
 } from "./ai-gateway.js";
 import { completeText } from "./ai-invoke.js";
+import { resolveSpendTier, type SpendTier } from "./spend-tiers.js";
 import { bridgePdfAttachments } from "./chat-attachment-pdf.js";
 import {
   estimateSharedHeadTokens, hasGpt56PromptCaching, splitSystemPrompt,
@@ -57,6 +58,8 @@ import {
 type GatewayMetadata = {
   // Stable Gadgets user identifier for attribution.
   user: string;
+  // Pacific: the user's spend tier, which gateway spend-limit rules key on. Only when TIERS is set.
+  tier?: SpendTier;
   // Gadgets execution context, present when the call is associated with a gadget operation.
   source?: GatewayMetadataContext["source"];
   gadgetId?: string;
@@ -171,14 +174,19 @@ export type Resent = {
   aiGatewayLogRoute?: AiGatewayLogRoute;
 };
 
-function buildMetadata(initiator: AiChatAuthorInfo, context?: GatewayMetadataContext): GatewayMetadata {
+function buildMetadata(initiator: AiChatAuthorInfo, context?: GatewayMetadataContext,
+                       tier?: SpendTier): GatewayMetadata {
   const metadata: GatewayMetadata = { user: initiator.id };
+  if (tier) metadata.tier = tier;
   if (context) {
     metadata.source = context.source;
     if (context.gadgetId) metadata.gadgetId = context.gadgetId;
     if (context.chatId !== undefined) metadata.chatId = context.chatId;
   }
   if (initiator.type === "gadget") metadata.automated = true;
+  // AI Gateway accepts at most 5 metadata entries per request. Only a gadget-initiated call in a
+  // chat reaches 6 once a tier is added, so it drops chatId, which no spend limit keys on.
+  if (tier && metadata.automated && metadata.chatId !== undefined) delete metadata.chatId;
   return metadata;
 }
 
@@ -789,12 +797,14 @@ function toWellFormedJson(value: unknown): unknown {
 export function getModel(env: Cloudflare.Env, config: AiModelConfig,
                          initiator: AiChatAuthorInfo,
                          options: ModelRoutingOptions = {}): ModelHandle {
+  const tier = resolveSpendTier(env, initiator.id);
+
   // BYOK: a connected user's own Cloudflare account pays for everything (all providers, including
   // Workers AI), routed through the user's own AI Gateway with unified billing. Honored regardless
   // of whether a platform AI Gateway is configured, so connected users are always billed correctly.
   if (options.userGateway) {
     return getModelViaUserGateway(
-        config, buildMetadata(initiator, options.metadata), options.userGateway,
+        config, buildMetadata(initiator, options.metadata, tier), options.userGateway,
         options.sessionAffinity);
   }
 
@@ -802,7 +812,7 @@ export function getModel(env: Cloudflare.Env, config: AiModelConfig,
   // tier). The config's apiToken/apiUrl/extraHeaders are ignored in that mode.
   let gwConfig = getAiGatewayConfig(env);
   if (gwConfig) {
-    return getModelViaGateway(gwConfig, config, initiator, options);
+    return getModelViaGateway(gwConfig, config, initiator, options, tier);
   }
 
   return getModelDirect(config, options.sessionAffinity);
@@ -900,8 +910,9 @@ function getModelViaGateway(
   config: AiModelConfig,
   initiator: AiChatAuthorInfo,
   options: ModelRoutingOptions,
+  tier?: SpendTier,
 ): ModelHandle {
-  const metadata = buildMetadata(initiator, options.metadata);
+  const metadata = buildMetadata(initiator, options.metadata, tier);
   const binding = gwConfig.bindingFor(config.provider);
   // No binding means either the provider can't ride one or the deployment has none; the second
   // case already required a token in the constructor, so this only fires for the first
@@ -1141,7 +1152,7 @@ export function getDecisionModel(env: Cloudflare.Env, config: AiModelConfig,
     return modelAt(workersAiAccountUrl(config),
         { apiKey: config.apiToken, headers: config.extraHeaders });
   }
-  const metadata = buildMetadata(initiator, metadataContext);
+  const metadata = buildMetadata(initiator, metadataContext, resolveSpendTier(env, initiator.id));
   // pi's System One transport POSTs {model, input} as Workers AI's REST API takes them and reads
   // back the REST envelope; both gateway routes take the bare input and return the bare result.
   // pi requires a key, which goes unsent.
