@@ -25,6 +25,7 @@ import { RpcStub as NativeRpcStub } from "cloudflare:workers";
 import { recordAnalytics } from "./analytics";
 import { handleClientErrorRequest } from "./client-errors.js";
 import { verifyCfAccessJwt } from "./access.js";
+import { isListedAdmin } from "./admin-list.js";
 import { resolveUiFeatureFlags } from "./feature-flags";
 import { serveSiteLogo, SITE_LOGO_PATH } from "./site-logo.js";
 import { createWorkshopLogger } from "./observability";
@@ -103,17 +104,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
 
     if (!name || !admins) return false;
 
-    if (typeof admins === "string") {
-      // Admins should be a JSON binding of array type, but `.env` doesn't actually let you
-      // specify JSON bindings, so we also support a string that parses as JSON array.
-      admins = JSON.parse(admins);
-    }
-
-    if (!Array.isArray(admins)) {
-      throw new TypeError("ADMINS must be configured as an array of usernames.");
-    }
-
-    return admins.includes(name);
+    return isListedAdmin(admins, name);
   }
 
   whoami(): Promise<AiChatAuthorInfo> {
